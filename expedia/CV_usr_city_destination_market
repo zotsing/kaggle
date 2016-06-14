@@ -1,0 +1,86 @@
+# using check-in data in 2015 for cross validation, find the best parameters for time and is_booking
+# import library
+from datetime import datetime
+import gzip
+from operator import itemgetter
+from collections import defaultdict
+from math import log,ceil,floor
+import numpy as np
+
+startT = datetime.now()
+
+def hotel_cty_ori_des_markt(f_tm,f_bk):
+    cty_ori_des_mrkt = defaultdict(lambda: defaultdict(int)) #
+    total = 0
+    with gzip.open('train.csv.gz','rt') as f:
+        tilte = f.readline()
+        for line in f:
+            
+            total += 1
+            if total % 4000000 == 0:
+                print ('Processed {} rows'.format(total))
+                
+            lst = line.rstrip('\n').split(",")
+            cnty = lst[3]
+            cty = lst[5]
+            ori_des = lst[6]
+            srch_mrkt = lst[22]
+            isbook = int(lst[18])
+            htl_clst = lst[23]
+            dtime     = lst[0]
+            srch_ci   = lst[11]
+            
+            if not ori_des:
+                continue
+                
+            if srch_ci:
+                ciDate = datetime.strptime(srch_ci,'%Y-%m-%d').date()
+            else:
+                ciDate = datetime.strptime(dtime,'%Y-%m-%d %H:%M:%S').date()
+            
+            if ciDate.year >2014 or ciDate.year < 2013: # 2015 srch_ci is used for CV
+                continue 
+                
+            endD = datetime.strptime('2016-01-01','%Y-%m-%d').date()
+            timediff = int((endD - ciDate).days/28) 
+            
+            wgt = (floor(log(40-timediff)) * f_tm + 1) * (10 + f_bk * isbook)
+            if (cnty and cty and ori_des and srch_mrkt and htl_clst):
+                cty_ori_des_mrkt[(cnty,cty,ori_des,srch_mrkt)][htl_clst] += int(wgt) #
+    return cty_ori_des_mrkt
+
+def eval(raw_f,pre_dict):
+    score = []
+    with open(raw_f,"r") as f:
+        for line in f:
+            lst = line.rstrip('\n').split(",")
+            cnty = lst[3]
+            cty = lst[5]
+            ori_des = lst[6]
+            srch_mrkt = lst[22]
+            isbook = int(lst[18])
+            htl_clst = lst[23]
+            key1 = (cnty,cty,ori_des,srch_mrkt)
+            if (cnty and cty and ori_des and srch_mrkt and (key1 in pre_dict) and isbook):
+                srch = pre_dict[key1]
+                top5 = sorted(srch.items(),key=itemgetter(1),reverse= True)[:5]
+                for i in range(len(top5)):
+                    if top5[i][0]==htl_clst:
+                        score.append(1/(1+i))
+                        break
+                    else:
+                        score.append(0)
+    return np.mean(score)
+
+###main####
+newf=open("result"+str(datetime.now().strftime("%Y-%m-%d-%H-%M")) + ".csv","w")
+newf.write('f_tm,f_bk,score')
+for f_tm in [2,4,6]:
+    for f_bk in [20,60,100]:
+        clst_pred = hotel_cty_ori_des_markt(f_tm,f_bk)
+        cv_rst    = eval('cv.csv',clst_pred)
+        newf.write('{},{},{}\n'.format(f_tm,f_bk,cv_rst))
+        print ('f_tm is: {}, f_bk is: {}, score is: {}'.format(f_tm,f_bk,cv_rst))
+        print(datetime.now()-startT)
+        del clst_pred        
+newf.close()
